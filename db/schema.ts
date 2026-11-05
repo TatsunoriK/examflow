@@ -1,0 +1,4 @@
+import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
+export const exams = sqliteTable('exams', {id:text('id').primaryKey(), owner:text('owner').notNull(), code:text('code').notNull().unique(), body:text('body').notNull(), created:integer('created').notNull()});
+export const attempts = sqliteTable('attempts', {id:text('id').primaryKey(), exam:text('exam').notNull(), student:text('student').notNull(), name:text('name').notNull(), started:integer('started').notNull(), submitted:integer('submitted'), answers:text('answers').notNull().default('{}'), events:text('events').notNull().default('[]'), recordings:text('recordings').notNull().default('[]'), score:integer('score')}, t => [uniqueIndex('attempt_exam_student_unique').on(t.exam,t.student)]);
+

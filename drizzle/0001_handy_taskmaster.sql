@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `attempt_exam_student_unique` ON `attempts` (`exam`,`student`);
