@@ -1,0 +1,6 @@
+__pycache__/
+.venv/
+models/
+*.joblib
+*.task
+*.pt
