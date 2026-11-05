@@ -1,5 +1,4 @@
 import { env } from 'cloudflare:workers';
-import { getChatGPTUser } from '../../chatgpt-auth';
 export const dynamic='force-dynamic';
 type ReviewFlag={time_s:number;label:'suspicious'|'cheating';confidence:number};
 type CameraAnalysis={status:string;reviewFlags:ReviewFlag[];modelVersion?:string;framesAnalyzed?:number};
@@ -56,10 +55,12 @@ async function handle(r:Request){try{
  if(p[0]==='auth'&&p[1]==='logout'&&r.method==='POST')return await logoutRequest(r,db);
  if(p[0]==='auth'&&p[1]==='logout'&&r.method==='GET')return await logoutRequest(r,db,true);
  if(p[0]==='auth'&&r.method==='POST')return await authRequest(r,p[1],db);
- const u=await getChatGPTUser() ?? await getAccountUser(r,db); if(!u)return json({error:'กรุณาเข้าสู่ระบบก่อนใช้งาน'},401);
- if(u.role==='student'&&p[0]==='exams'&&r.method==='POST')return json({error:'บัญชีนักเรียนไม่มีสิทธิ์สร้างข้อสอบ'},403);
- if(u.role==='teacher'&&p[0]==='start')return json({error:'บัญชีอาจารย์ไม่สามารถเข้าสอบในฐานะนักเรียน'},403);
- if(p[0]==='me')return json({name:u.displayName});
+ const u=await getAccountUser(r,db); if(!u)return json({error:'กรุณาเข้าสู่ระบบก่อนใช้งาน'},401);
+ const roleMethods:Record<string,Record<string,string[]>>={teacher:{me:['GET'],exams:['GET','POST'],results:['GET'],video:['GET'],camera:['GET']},student:{me:['GET'],join:['POST'],start:['POST'],attempt:['POST']}};
+ const allowedMethods=roleMethods[u.role]?.[p[0]];
+ if(!allowedMethods)return json({error:'บัญชีนี้ไม่มีสิทธิ์ใช้งานรายการดังกล่าว'},403);
+ if(!allowedMethods.includes(r.method))return json({error:'ไม่รองรับ method นี้'},405);
+ if(p[0]==='me')return json({name:u.displayName,role:u.role});
  if(p[0]==='exams'&&r.method==='GET'){
  const rows=await db.prepare('SELECT * FROM exams WHERE owner=? ORDER BY created DESC').bind(u.userId).all();return json(rows.results.map((x:any)=>({...x,...JSON.parse(x.body),body:undefined})));}
  if(p[0]==='exams'&&r.method==='POST'){

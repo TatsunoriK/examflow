@@ -2,6 +2,7 @@ const fs = require('fs');
 const ts = require('typescript');
 const assert = require('node:assert/strict');
 const { DatabaseSync } = require('node:sqlite');
+const { createHash } = require('node:crypto');
 
 (async () => {
   const db = new DatabaseSync(':memory:');
@@ -32,6 +33,15 @@ const { DatabaseSync } = require('node:sqlite');
     },
   };
   globalThis.testUser = () => user;
+  for (const [id, role] of [['teacher', 'teacher'], ['student', 'student'], ['intruder', 'student']]) {
+    const email = `${id}@test.local`;
+    db.prepare('INSERT INTO auth_users(id,name,email,role,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?,?)')
+      .run(id, id, email, role, 'test-salt', 'test-hash', Date.now());
+    const token = `${id}-test-token`;
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare('INSERT INTO auth_sessions(id,user_id,token_hash,expires_at,created_at) VALUES(?,?,?,?,?)')
+      .run(`${id}-session`, id, tokenHash, Date.now() + 60_000, Date.now());
+  }
 
   const source = fs.readFileSync('app/api/[...path]/route.ts', 'utf8')
     .replace("import { env } from 'cloudflare:workers';", 'const env=globalThis.testEnv;')
@@ -45,10 +55,11 @@ const { DatabaseSync } = require('node:sqlite');
   let checks = 0;
 
   async function request(path, body, status = 200) {
+    const token = user ? `${user.userId}-test-token` : '';
     const response = await (body === undefined ? GET : POST)(new Request(`https://test/api/${path}`,
-      body === undefined ? {} : {
+      body === undefined ? { headers: token ? { cookie: `examflow_session=${token}` } : {} } : {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(token ? { cookie: `examflow_session=${token}` } : {}) },
         body: JSON.stringify(body),
       }));
     assert.equal(response.status, status, path);
@@ -57,9 +68,10 @@ const { DatabaseSync } = require('node:sqlite');
   }
 
   async function upload(path, data, status = 200) {
+    const token = user ? `${user.userId}-test-token` : '';
     const response = await POST(new Request(`https://test/api/${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'video/webm' },
+      headers: { 'content-type': 'video/webm', ...(token ? { cookie: `examflow_session=${token}` } : {}) },
       body: data,
     }));
     assert.equal(response.status, status, path);
@@ -70,6 +82,7 @@ const { DatabaseSync } = require('node:sqlite');
   user = null;
   await request('exams', undefined, 401);
   user = { userId: 'teacher' };
+  await request('start', { exam: 'not-a-test', name: 'Teacher', cameraConsent: true }, 403);
   await request('exams', { title: '', minutes: 30, questions: [] }, 400);
   const created = await request('exams', {
     title: 'Test',
@@ -80,7 +93,8 @@ const { DatabaseSync } = require('node:sqlite');
   assert.equal((await request('exams')).length, 1);
 
   user = { userId: 'student' };
-  assert.equal((await request('exams')).length, 0);
+  await request('exams', undefined, 403);
+  await request('exams', { title: 'Forbidden', minutes: 10, questions: [] }, 403);
   const joined = await request('join', { code: created.code });
   assert.equal(joined.count, 1);
   assert.equal(joined.questions, undefined);
@@ -143,13 +157,14 @@ const { DatabaseSync } = require('node:sqlite');
   assert.equal(results[0].recordings.length, 1);
   assert.equal(results[0].cameraRecordings.length, 3);
   assert.deepEqual(results[0].proctoringEvents.map(item => item.status), ['not_configured', 'analyzed', 'model_unavailable']);
-  const screenVideo = await GET(new Request(`https://test/api/video/${started.id}/0`));
+  const teacherToken = 'teacher-test-token';
+  const screenVideo = await GET(new Request(`https://test/api/video/${started.id}/0`, { headers: { cookie: `examflow_session=${teacherToken}` } }));
   assert.equal(screenVideo.status, 200);
-  const cameraVideo = await GET(new Request(`https://test/api/camera/${started.id}/0`));
+  const cameraVideo = await GET(new Request(`https://test/api/camera/${started.id}/0`, { headers: { cookie: `examflow_session=${teacherToken}` } }));
   assert.equal(cameraVideo.status, 200);
   checks += 2;
 
-  console.log(`PASS: ${checks} API checks — auth, consent, recording, camera, analysis status, scoring and owner-only video access`);
+  console.log(`PASS: ${checks} API checks — roles, auth, consent, recording, camera, scoring and owner-only video access`);
   db.close();
 })().catch(error => {
   console.error(error);
