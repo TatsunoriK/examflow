@@ -26,9 +26,39 @@ async function analyzeCamera(data:ArrayBuffer,type:string):Promise<CameraAnalysi
 }
 export async function GET(r:Request){return handle(r)}
 export async function POST(r:Request){return handle(r)}
+const toHex=(bytes:Uint8Array)=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+async function digest(value:string){return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))))}
+async function passwordHash(password:string,salt:string){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:new TextEncoder().encode(salt),iterations:210000},key,256);return toHex(new Uint8Array(bits))}
+function cookieToken(r:Request){return (r.headers.get('cookie')||'').split(';').map(v=>v.trim()).find(v=>v.startsWith('examflow_session='))?.slice('examflow_session='.length)||''}
+async function getAccountUser(r:Request,db:any){const token=cookieToken(r);if(!token)return null;const row:any=await db.prepare('SELECT u.id,u.name,u.email,u.role FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').bind(await digest(token),Date.now()).first();return row?{userId:row.id,displayName:row.name,email:row.email,fullName:row.name,role:row.role}:null}
+async function authRequest(r:Request,action:string|undefined,db:any){
+ const b:any=await r.json().catch(()=>({}));const email=typeof b.email==='string'?b.email.trim().toLowerCase():'';const password=typeof b.password==='string'?b.password:'';
+ if(!email||email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<8||password.length>128)return json({error:'กรุณากรอกอีเมลให้ถูกต้องและรหัสผ่านอย่างน้อย 8 ตัวอักษร'},400);
+ let user:any;
+ if(action==='register'){
+  const name=typeof b.name==='string'?b.name.trim():'';const role=b.role;
+  if(name.length<2||name.length>120||!['teacher','student'].includes(role))return json({error:'กรุณากรอกชื่อและเลือกบทบาทให้ถูกต้อง'},400);
+  const id=crypto.randomUUID(),salt=toHex(crypto.getRandomValues(new Uint8Array(16))),hash=await passwordHash(password,salt);
+  try{await db.prepare('INSERT INTO auth_users(id,name,email,role,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?,?)').bind(id,name,email,role,salt,hash,Date.now()).run()}catch{return json({error:'อีเมลนี้มีบัญชีแล้ว'},409)}
+  user={userId:id,displayName:name,email,fullName:name,role};
+ }else if(action==='login'){
+  const row:any=await db.prepare('SELECT id,name,email,role,password_salt,password_hash FROM auth_users WHERE email=?').bind(email).first();
+  if(!row||await passwordHash(password,row.password_salt)!==row.password_hash)return json({error:'อีเมลหรือรหัสผ่านไม่ถูกต้อง'},401);
+  user={userId:row.id,displayName:row.name,email:row.email,fullName:row.name,role:row.role};
+ }else return json({error:'ไม่พบรายการ'},404);
+ const token=toHex(crypto.getRandomValues(new Uint8Array(32))),expires=Date.now()+30*24*60*60*1000;
+ await db.prepare('INSERT INTO auth_sessions(id,user_id,token_hash,expires_at,created_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),user.userId,await digest(token),expires,Date.now()).run();
+ return new Response(JSON.stringify({user:{name:user.displayName,email:user.email,role:user.role}}),{headers:{'Content-Type':'application/json','Cache-Control':'no-store','Set-Cookie':`examflow_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${new URL(r.url).protocol==='https:'?'; Secure':''}`}});
+}
+async function logoutRequest(r:Request,db:any,redirectToHome=false){const token=cookieToken(r);if(token)await db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').bind(await digest(token)).run();const headers={'Set-Cookie':'examflow_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0','Cache-Control':'no-store'};return redirectToHome?new Response(null,{status:302,headers:{...headers,Location:'/'}}):new Response(JSON.stringify({ok:true}),{headers:{...headers,'Content-Type':'application/json'}})}
 async function handle(r:Request){try{
- const u=await getChatGPTUser(); if(!u)return json({error:'กรุณาเข้าสู่ระบบก่อนใช้งาน'},401);
  const db=env.DB!; const p=new URL(r.url).pathname.split('/').filter(Boolean).slice(1); const now=Date.now();
+ if(p[0]==='auth'&&p[1]==='logout'&&r.method==='POST')return await logoutRequest(r,db);
+ if(p[0]==='auth'&&p[1]==='logout'&&r.method==='GET')return await logoutRequest(r,db,true);
+ if(p[0]==='auth'&&r.method==='POST')return await authRequest(r,p[1],db);
+ const u=await getChatGPTUser() ?? await getAccountUser(r,db); if(!u)return json({error:'กรุณาเข้าสู่ระบบก่อนใช้งาน'},401);
+ if(u.role==='student'&&p[0]==='exams'&&r.method==='POST')return json({error:'บัญชีนักเรียนไม่มีสิทธิ์สร้างข้อสอบ'},403);
+ if(u.role==='teacher'&&p[0]==='start')return json({error:'บัญชีอาจารย์ไม่สามารถเข้าสอบในฐานะนักเรียน'},403);
  if(p[0]==='me')return json({name:u.displayName});
  if(p[0]==='exams'&&r.method==='GET'){
  const rows=await db.prepare('SELECT * FROM exams WHERE owner=? ORDER BY created DESC').bind(u.userId).all();return json(rows.results.map((x:any)=>({...x,...JSON.parse(x.body),body:undefined})));}

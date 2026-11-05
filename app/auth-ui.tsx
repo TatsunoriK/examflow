@@ -1,0 +1,17 @@
+'use client';
+import {useState} from 'react';
+import Link from 'next/link';
+import {GraduationCap,BookOpen,ArrowRight,ShieldCheck} from 'lucide-react';
+
+export default function AuthPage(){
+ const [mode,setMode]=useState<'login'|'register'>('login');
+ const [role,setRole]=useState<'teacher'|'student'>('student');
+ const [name,setName]=useState(''),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ async function submit(e:React.FormEvent){e.preventDefault();setError('');setBusy(true);try{const response=await fetch(`/api/auth/${mode}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password,role})});const data=await response.json();if(!response.ok)throw Error(data.error||'ไม่สามารถเข้าสู่ระบบได้');location.assign('/')}catch(e){setError(e instanceof Error?e.message:'เกิดข้อผิดพลาด')}finally{setBusy(false)}}
+ return <div className="auth-shell"><section className="auth-panel"><Link className="auth-brand" href="/"><span><GraduationCap size={22}/></span>Exam<span>Flow</span></Link><div className="auth-content"><div className="auth-mark"><BookOpen size={22}/></div><p className="auth-eyebrow">EXAMFLOW ACCOUNT</p><h1>{mode==='login'?'ยินดีต้อนรับกลับ':'สร้างบัญชี ExamFlow'}</h1><p className="auth-subtitle">{mode==='login'?'เข้าสู่ระบบเพื่อจัดการข้อสอบและการสอบของคุณ':'เลือกบทบาทและกรอกข้อมูลเพื่อเริ่มต้นใช้งาน'}</p>
+ <div className="auth-tabs"><button className={mode==='login'?'selected':''} onClick={()=>{setMode('login');setError('')}}>เข้าสู่ระบบ</button><button className={mode==='register'?'selected':''} onClick={()=>{setMode('register');setError('')}}>สมัครสมาชิก</button></div>
+ <form onSubmit={submit}>{mode==='register'&&<><label>ชื่อที่แสดง<input required minLength={2} maxLength={120} autoComplete="name" value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อและนามสกุล"/></label><fieldset><legend>ฉันเป็น</legend><div className="auth-roles"><button type="button" className={role==='student'?'active':''} onClick={()=>setRole('student')}><BookOpen size={17}/>นักเรียน</button><button type="button" className={role==='teacher'?'active':''} onClick={()=>setRole('teacher')}><GraduationCap size={17}/>อาจารย์</button></div></fieldset></>}
+ <label>อีเมล<input type="email" required maxLength={254} autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label>รหัสผ่าน<input type="password" required minLength={8} maxLength={128} autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)} placeholder="อย่างน้อย 8 ตัวอักษร"/></label>
+ {error&&<p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={busy}>{busy?'กำลังดำเนินการ…':mode==='login'?'เข้าสู่ระบบ':'สร้างบัญชี'}<ArrowRight size={17}/></button></form>
+ <p className="auth-privacy"><ShieldCheck size={15}/> ข้อมูลบัญชีจัดเก็บอย่างปลอดภัยในระบบของ ExamFlow</p></div><footer className="auth-footer">ExamFlow · ระบบสอบออนไลน์</footer></section><aside className="auth-aside"><div className="auth-illustration"><div className="auth-orbit orbit-one"/><div className="auth-orbit orbit-two"/><div className="auth-card"><span><GraduationCap size={27}/></span><b>เรียนรู้และสอบ</b><small>ครบทุกขั้นตอนในที่เดียว</small><div><i/><i/><i/></div></div></div><p>พื้นที่สำหรับการเรียนรู้<br/>และการสอบที่โปร่งใส</p><small>FOR STUDENTS & EDUCATORS</small></aside></div>
+}
